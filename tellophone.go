@@ -157,9 +157,14 @@ func onStop() {
 }
 
 func onPaint() {
-	glctx.ClearColor(0.0, 0.0, 0.0, 0.0)
+	if flying {
+		glctx.ClearColor(0.0, 0.25, 0.0, 0.0)
+	} else {
+		glctx.ClearColor(0.25, 0.0, 0.0, 0.0)
+	}
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 	glctx.UseProgram(program)
+	glctx.LineWidth(3)
 	glctx.BindBuffer(gl.ARRAY_BUFFER, vertBuf)
 	glctx.EnableVertexAttribArray(position)
 	glctx.VertexAttribPointer(position, 3, gl.FLOAT, false, 0, 0)
