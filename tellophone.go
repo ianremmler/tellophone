@@ -6,8 +6,7 @@ import (
 	"math"
 	"time"
 
-	"gobot.io/x/gobot"
-	"gobot.io/x/gobot/platforms/dji/tello"
+	"github.com/SMerrony/tello"
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
@@ -29,25 +28,26 @@ void main() {
 
 const fragShader = `#version 100
 
+uniform mediump float grayLevel;
+
 void main() {
-	gl_FragColor = vec4(1.0);
+	gl_FragColor = vec4(vec3(grayLevel), 1.0);
 }`
 
 type coord struct{ x, y, z float64 }
 
-type droneCtrlFunc func(val int) error
-
 var (
-	appSize         size.Event
-	velocity        coord
-	yawVelocity     float64
-	flying          bool
-	takeoffLandTime time.Time
-	drone           *tello.Driver
+	appSize size.Event
+
+	velocity    coord
+	yawVelocity float64
+	flightData  tello.FlightData
+	drone       *tello.Tello
 
 	glctx     gl.Context
 	program   gl.Program
 	position  gl.Attrib
+	grayLevel gl.Uniform
 	vertBuf   gl.Buffer
 	lineVerts = f32.Bytes(binary.LittleEndian,
 		-0.5, 0.0, 0.0,
@@ -69,17 +69,10 @@ func appMain(ap app.App) {
 		case lifecycle.Event:
 			switch evt.Crosses(lifecycle.StageVisible) {
 			case lifecycle.CrossOn:
-				if err := sensor.Enable(sensor.Accelerometer, 20*time.Millisecond); err != nil {
-					log.Println(err)
-				}
 				glctx = evt.DrawContext.(gl.Context)
 				onStart()
 				ap.Send(paint.Event{})
 			case lifecycle.CrossOff:
-				resetCtrl()
-				if err := sensor.Disable(sensor.Accelerometer); err != nil {
-					log.Println(err)
-				}
 				onStop()
 				glctx = nil
 			}
@@ -101,16 +94,13 @@ func appMain(ap app.App) {
 }
 
 func onTouch(evt touch.Event) {
-	if evt.Type == touch.TypeEnd {
+	if evt.Type == touch.TypeEnd || appSize.WidthPx < 2 || appSize.HeightPx < 2 {
 		velocity.z, yawVelocity = 0.0, 0.0
-		yawVelocity = 0.0
 	} else {
-		yawVelocity = 200.0*float64(evt.X)/float64(appSize.WidthPx-1) - 100.0
-		velocity.z = 200.0*float64(evt.Y)/float64(appSize.HeightPx-1) - 100.0
+		yawVelocity = 2.0*float64(evt.X)/float64(appSize.WidthPx-1) - 1.0
+		velocity.z = -(2.0*float64(evt.Y)/float64(appSize.HeightPx-1) - 1.0)
 	}
-	if flying {
-		updateCtrl()
-	}
+	updateCtrl()
 }
 
 func onSensor(evt sensor.Event) {
@@ -130,86 +120,95 @@ func onSensor(evt sensor.Event) {
 	if hyp := math.Sqrt(accel.y*accel.y + accel.z*accel.z); hyp != 0.0 {
 		pitch = math.Atan(accel.x / hyp)
 	}
-	velocity.x = 100.0 * roll / (0.5 * math.Pi)
-	velocity.y = 100.0 * pitch / (0.5 * math.Pi)
-	if flying {
-		updateCtrl()
-	}
+	velocity.x = roll / (0.5 * math.Pi)
+	velocity.y = -pitch / (0.5 * math.Pi)
+	updateCtrl()
+
+	flightData = drone.GetFlightData()
 }
 
 func onStart() {
 	var err error
+	if err = sensor.Enable(sensor.Accelerometer, 20*time.Millisecond); err != nil {
+		log.Print(err)
+	}
+	if err = drone.ControlConnectDefault(); err != nil {
+		log.Print(err)
+	}
 	program, err = glutil.CreateProgram(glctx, vertShader, fragShader)
 	if err != nil {
 		log.Print(err)
 		return
 	}
-
 	vertBuf = glctx.CreateBuffer()
 	glctx.BindBuffer(gl.ARRAY_BUFFER, vertBuf)
 	glctx.BufferData(gl.ARRAY_BUFFER, lineVerts, gl.STATIC_DRAW)
 	position = glctx.GetAttribLocation(program, "position")
+	grayLevel = glctx.GetUniformLocation(program, "grayLevel")
 }
 
 func onStop() {
+	resetCtrl()
+	drone.ControlDisconnect()
+	if err := sensor.Disable(sensor.Accelerometer); err != nil {
+		log.Println(err)
+	}
 	glctx.DeleteProgram(program)
 	glctx.DeleteBuffer(vertBuf)
 }
 
 func onPaint() {
-	if flying {
-		glctx.ClearColor(0.0, 0.25, 0.0, 0.0)
+	if flightData.BatteryCritical {
+		glctx.ClearColor(0.75, 0.0, 0.0, 0.0)
+	} else if flightData.BatteryLow {
+		glctx.ClearColor(1.0, 0.75, 0.0, 0.0)
 	} else {
-		glctx.ClearColor(0.25, 0.0, 0.0, 0.0)
+		glctx.ClearColor(0.0, 0.0, 0.0, 0.0)
 	}
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 	glctx.UseProgram(program)
-	glctx.LineWidth(3)
 	glctx.BindBuffer(gl.ARRAY_BUFFER, vertBuf)
 	glctx.EnableVertexAttribArray(position)
 	glctx.VertexAttribPointer(position, 3, gl.FLOAT, false, 0, 0)
+	glctx.LineWidth(3)
+	glctx.Uniform1f(grayLevel, 0.0)
+	glctx.DrawArrays(gl.LINES, 0, 4)
+	glctx.LineWidth(1)
+	glctx.Uniform1f(grayLevel, 1.0)
 	glctx.DrawArrays(gl.LINES, 0, 4)
 	glctx.DisableVertexAttribArray(position)
 }
 
 func initDrone() {
-	drone = tello.NewDriver("8888")
-	robot := gobot.NewRobot("tello", []gobot.Connection{}, []gobot.Device{drone})
-	robot.Start(false)
+	drone = &tello.Tello{}
+	if err := drone.ControlConnectDefault(); err != nil {
+		log.Println(err)
+	}
 }
 
 func resetCtrl() {
 	velocity, yawVelocity = coord{}, 0.0
-	updateCtrl()
+	drone.Hover()
 }
 
 func takeoffLand() {
-	if time.Since(takeoffLandTime) < 1*time.Second {
-		return
-	}
-
 	resetCtrl()
-	if flying {
+	if flightData.Flying {
 		drone.Land()
 	} else {
 		drone.TakeOff()
 	}
-	flying = !flying
-	takeoffLandTime = time.Now()
+}
+
+func telloParam(val float64) int16 {
+	return int16(math.MaxInt16 * math.Max(-1.0, (math.Min(1.0, val))))
 }
 
 func updateCtrl() {
-	droneCtrl(drone.Right, drone.Left, velocity.x)
-	droneCtrl(drone.Backward, drone.Forward, velocity.y)
-	droneCtrl(drone.Down, drone.Up, velocity.z)
-	droneCtrl(drone.Clockwise, drone.CounterClockwise, yawVelocity)
-}
-
-func droneCtrl(posCtrl, negCtrl droneCtrlFunc, val float64) {
-	arg := int(math.Max(0.0, math.Min(100.0, math.Abs(val))))
-	if val >= 0.0 {
-		posCtrl(arg)
-	} else {
-		negCtrl(arg)
-	}
+	drone.UpdateSticks(tello.StickMessage{
+		Rx: telloParam(velocity.x),
+		Ry: telloParam(velocity.y),
+		Lx: telloParam(yawVelocity),
+		Ly: telloParam(velocity.z),
+	})
 }
