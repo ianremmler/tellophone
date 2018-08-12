@@ -108,7 +108,9 @@ func onTouch(evt touch.Event) {
 		yawVelocity = 200.0*float64(evt.X)/float64(appSize.WidthPx-1) - 100.0
 		velocity.z = 200.0*float64(evt.Y)/float64(appSize.HeightPx-1) - 100.0
 	}
-	updateCtrl(flying)
+	if flying {
+		updateCtrl()
+	}
 }
 
 func onSensor(evt sensor.Event) {
@@ -130,7 +132,9 @@ func onSensor(evt sensor.Event) {
 	}
 	velocity.x = 100.0 * roll / (0.5 * math.Pi)
 	velocity.y = 100.0 * pitch / (0.5 * math.Pi)
-	updateCtrl(flying)
+	if flying {
+		updateCtrl()
+	}
 }
 
 func onStart() {
@@ -171,7 +175,7 @@ func initDrone() {
 
 func resetCtrl() {
 	velocity, yawVelocity = coord{}, 0.0
-	updateCtrl(true)
+	updateCtrl()
 }
 
 func takeoffLand() {
@@ -189,11 +193,7 @@ func takeoffLand() {
 	takeoffLandTime = time.Now()
 }
 
-func updateCtrl(send bool) {
-	if !send {
-		return
-	}
-
+func updateCtrl() {
 	droneCtrl(drone.Right, drone.Left, velocity.x)
 	droneCtrl(drone.Backward, drone.Forward, velocity.y)
 	droneCtrl(drone.Down, drone.Up, velocity.z)
