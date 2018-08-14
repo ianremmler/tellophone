@@ -42,7 +42,7 @@ var (
 	velocity    coord
 	yawVelocity float64
 	flightData  tello.FlightData
-	drone       *tello.Tello
+	drone       tello.Tello
 
 	glctx     gl.Context
 	program   gl.Program
@@ -159,11 +159,13 @@ func onStop() {
 
 func onPaint() {
 	if flightData.BatteryCritical {
-		glctx.ClearColor(0.75, 0.0, 0.0, 0.0)
+		glctx.ClearColor(0.5, 0.0, 0.0, 0.0)
 	} else if flightData.BatteryLow {
-		glctx.ClearColor(1.0, 0.75, 0.0, 0.0)
+		glctx.ClearColor(0.5, 0.5, 0.0, 0.0)
+	} else if flightData.Flying {
+		glctx.ClearColor(0.0, 0.25, 0.0, 0.0)
 	} else {
-		glctx.ClearColor(0.0, 0.0, 0.0, 0.0)
+		glctx.ClearColor(0.0, 0.0, 0.25, 0.0)
 	}
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 	glctx.UseProgram(program)
@@ -180,7 +182,6 @@ func onPaint() {
 }
 
 func initDrone() {
-	drone = &tello.Tello{}
 	if err := drone.ControlConnectDefault(); err != nil {
 		log.Println(err)
 	}
